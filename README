@@ -1,0 +1,28 @@
+AsyncmongoSession class, used to manage persistence across multiple requests. Uses
+a mongodb backend and Cookies. This library is designed for use with
+Tornado.
+
+Built on top of asyncmongo by bit.ly - https://github.com/bitly/asyncmongo
+The decorator is written to be completely asynchronous and not block.
+Because of this some care should be taken to optimize your MongoDB
+instance. Be sure to set an index on the "sid" key in your sessions
+collection.
+
+The session is added as session property to your request handler, ie:
+self.session. It can be manipulated as your would any dictionary object.
+
+Included with the library is a settings file, configured for default
+permissions. Some of the more advanced tuning you can do is with token
+expiration. In order to create some additional security for sessions used
+in a non-ssl environment, the token stored in the browser rotates. If you
+are using ssl, or more interested in performance than security you can set
+SESSION_TOKEN_TTL to an extremely high number to avoid writes.
+
+Note: In an effort increate performance, all writes are delayed until after the
+request method has completed. 
+
+Example:
+    @amsession
+    def get(self):
+        self.render("index.html", session=self.session)
+
