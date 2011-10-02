@@ -19,8 +19,10 @@ import uuid
 import datetime
 import settings
 import time
+import logging
+from tornado.web import RequestHandler
 
-class AsyncmongoSession(object):
+class AsyncMongoSession(object):
     """
     AsyncmongoSession class, used to manage persistence across multiple requests. Uses
     a mongodb backend and Cookies. This library is designed for use with
@@ -76,8 +78,12 @@ class AsyncmongoSession(object):
 
         self.new_session = True
         self.do_put = False
-        self.do_save = False
+        self.req_obj.do_save = False
         self.cookie = req_obj.get_cookie(cookie_name)
+
+        # insert the monkey patched finish()
+        self.req_obj.on_finish = self.finish
+
         if self.cookie:
             try:
                 (self.token, self.sid) = self.cookie.split("@")
@@ -117,28 +123,33 @@ class AsyncmongoSession(object):
 
         if self.do_put:
             self._put()
+        else:
+            self._handle_response()
 
     def _put(self):
         if self.session.get("_id"):
             self.db.update({"sid": self.sid}, {"$set": {"data":
                 self.session["data"], "tokens": self.session["tokens"]}},
-                callback=self._write_cookie)
+                callback=self._handle_response)
         else:
-            self.db.save(self.session, callback=self._write_cookie)
+            self.db.save(self.session, callback=self._handle_response)
 
-    def _write_cookie(self, *args, **kwargs):
+    def _handle_response(self, *args, **kwargs):
         cookie = "%s@%s" % (self.session["tokens"][0], self.sid)
         self.req_obj.set_cookie(name = self.cookie_name, value =
                 cookie, path = self.cookie_path)
+        # TODO: This is broken, it runs the callback, but if the callback
+        # is asynchronous it doesn't know to wait for it to complete before
+        # moving to save. I need to figure out how to wrap this correctly.
         self.callback(self.req_obj)
-        if self.do_save:
-            self.db.update({"sid": self.sid}, {"$set": {"data":
-            self.session["data"]}}, callback=self._pass)
+        #if self.req_obj.do_save:
+        #    self.db.update({"sid": self.sid}, {"$set": {"data":
+        #    self.session["data"]}}, callback=self._pass)
 
 
     def delete(self):
         self.session['tokens'] = []
-        self.do_save = True
+        self.req_obj.do_save = True
         return True
 
     def has_key(self, keyname):
@@ -150,9 +161,15 @@ class AsyncmongoSession(object):
         else:
             return default
 
+    def finish(self):
+        # monkey patch the instance to get the mongodb session to save
+        if self.req_obj.do_save:
+            self.db.update({"sid": self.sid}, {"$set": {"data":
+            self.session["data"]}}, callback=self._pass)
+
     def __delitem__(self, key):
         del self.session["data"][key]
-        self.do_save = True
+        self.req_obj.do_save = True
         return True
 
 
@@ -161,7 +178,7 @@ class AsyncmongoSession(object):
 
     def __setitem__(self, key, val):
         self.session["data"][key] = val
-        self.do_save = True
+        self.req_obj.do_save = True
         return True
 
     def __len__(self):
@@ -177,14 +194,25 @@ class AsyncmongoSession(object):
     def __str__(self):
         return u"{%s}" % ', '.join(['"%s" = "%s"' % (k, self.session["data"][k]) for k in self.session["data"]])
 
-    def _pass(self, *args, **kwargs):
+    def _pass(self, response, error):
         pass
 
 def amsession(method):
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
-        self.session = AsyncmongoSession(self, callback=method)
+        self.session = AsyncMongoSession(self, callback=method)
 
     return wrapper 
 
+"""
+class AsyncMongoSessionHandler(RequestHandler):
+    def __init__(self):
+        super(AsyncMongoSessionHandler, self).__init__()
+        self.session = AsyncMongoSession(self)
 
+    def finish(self, chunk = None):
+        super(AsyncMongoSessionHandler, self).finish(chunk = chunk)
+        if self.session.do_save:
+            self.db.update({"sid": self.sid}, {"$set": {"data":
+                self.session["data"]}}, callback=self._pass)
+"""
