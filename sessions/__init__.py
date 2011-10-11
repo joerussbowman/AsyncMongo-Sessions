@@ -20,6 +20,7 @@ import datetime
 import settings
 import time
 import logging
+import bson
 from tornado.web import RequestHandler
 
 class AsyncMongoSession(object):
@@ -28,11 +29,8 @@ class AsyncMongoSession(object):
     a mongodb backend and Cookies. This library is designed for use with
     Tornado.
 
-    Built on top of asyncmongo by bit.ly - https://github.com/bitly/asyncmongo
+    Built on top of AsyncMongo by bit.ly - https://github.com/bitly/asyncmongo
     The decorator is written to be completely asynchronous and not block.
-    Because of this some care should be taken to optimize your MongoDB
-    instance. Be sure to set an index on the "sid" key in your sessions
-    collection.
 
     The session is added as session property to your request handler, ie:
     self.session. It can be manipulated as your would any dictionary object.
@@ -44,12 +42,17 @@ class AsyncMongoSession(object):
     are using ssl, or more interested in performance than security you can set
     SESSION_TOKEN_TTL to an extremely high number to avoid writes.
 
-    Note: In an effort increate performance, all writes are delayed until after the
-    request method has completed. 
+    Note: In an effort increate performance, all data writes are delayed until 
+    after the request method has completed. However, security token updates
+    are saved as they happen.
 
     Example:
-        @amsession
+        @asynmongosession
         def get(self):
+            if self.session.has_key("test"):
+                self.session += 1
+            else:
+                self.session = 0
             self.render("index.html", session=self.session)
     """
 
@@ -64,8 +67,12 @@ class AsyncMongoSession(object):
         """
         __init__ loads the session, checking the browser for a valid session
         token. It will either validate the session and/or create a new one
-        if necessary. db is the MongoDB connection which must be passed from
-        the application.
+        if necessary. 
+
+        Currently AsyncMongoSession expects a db attribute on the request
+        object which is an AsyncMongo connection. This is just how I'm using
+        it. If other developers start using this library then I will consider
+        making the db connection passed as an argument or something.
         """
 
         self.req_obj = req_obj
@@ -78,25 +85,21 @@ class AsyncMongoSession(object):
 
         self.new_session = True
         self.do_put = False
-        self.req_obj.do_save = False
+        self.do_save = False
+        self.do_delete = False
+        # self.done is part of UGLY HACK below
+        self.done = False
         self.cookie = req_obj.get_cookie(cookie_name)
 
-        # insert the monkey patched finish()
-        self.req_obj.on_finish = self.finish
-
         if self.cookie:
-            try:
-                (self.token, self.sid) = self.cookie.split("@")
-                self.session = self.db.find_one({"sid":
-                    self.sid}, callback=self._validate_cookie)
-            except:
-                self._new_session()
+            (self.token, _id) = self.cookie.split("@")
+            self.session = self.db.find_one({"_id":
+                bson.ObjectId(_id)}, callback=self._validate_cookie)
         else:
             self._new_session()
 
     def _new_session(self):
-        self.sid = str(uuid.uuid4())
-        self.session = {"sid": self.sid,
+        self.session = {"_id": bson.ObjectId(),
                 "tokens": [str(uuid.uuid4())],
                 "last_token_update": datetime.datetime.now(),
                 "data": {},
@@ -128,28 +131,26 @@ class AsyncMongoSession(object):
 
     def _put(self):
         if self.session.get("_id"):
-            self.db.update({"sid": self.sid}, {"$set": {"data":
-                self.session["data"], "tokens": self.session["tokens"]}},
+            self.db.update({"_id": self.session["_id"]}, {"$set": {"data":
+                self.session["data"], "tokens": self.session["tokens"],
+                "last_token_update": self.session["last_token_update"]}},
+                upsert=True,
                 callback=self._handle_response)
         else:
             self.db.save(self.session, callback=self._handle_response)
 
     def _handle_response(self, *args, **kwargs):
-        cookie = "%s@%s" % (self.session["tokens"][0], self.sid)
+        # more UGLY HACK
+        self.done = True
+        cookie = "%s@%s" % (self.session["tokens"][0], self.session["_id"])
         self.req_obj.set_cookie(name = self.cookie_name, value =
                 cookie, path = self.cookie_path)
-        # TODO: This is broken, it runs the callback, but if the callback
-        # is asynchronous it doesn't know to wait for it to complete before
-        # moving to save. I need to figure out how to wrap this correctly.
         self.callback(self.req_obj)
-        #if self.req_obj.do_save:
-        #    self.db.update({"sid": self.sid}, {"$set": {"data":
-        #    self.session["data"]}}, callback=self._pass)
 
 
     def delete(self):
         self.session['tokens'] = []
-        self.req_obj.do_save = True
+        self.do_delete = True
         return True
 
     def has_key(self, keyname):
@@ -161,15 +162,9 @@ class AsyncMongoSession(object):
         else:
             return default
 
-    def finish(self):
-        # monkey patch the instance to get the mongodb session to save
-        if self.req_obj.do_save:
-            self.db.update({"sid": self.sid}, {"$set": {"data":
-            self.session["data"]}}, callback=self._pass)
-
     def __delitem__(self, key):
         del self.session["data"][key]
-        self.req_obj.do_save = True
+        self.do_save = True
         return True
 
 
@@ -178,7 +173,7 @@ class AsyncMongoSession(object):
 
     def __setitem__(self, key, val):
         self.session["data"][key] = val
-        self.req_obj.do_save = True
+        self.do_save = True
         return True
 
     def __len__(self):
@@ -197,22 +192,29 @@ class AsyncMongoSession(object):
     def _pass(self, response, error):
         pass
 
-def amsession(method):
+def asyncmongosession(method):
+
     @functools.wraps(method)
     def wrapper(self, *args, **kwargs):
+        def finish(self, *args, **kwargs):
+            """ 
+            This is a monkey patch finish which will save or delete
+            session data at the end of a request.
+            """
+            # TODO: UGLY HACK
+            # for some reason finish keeps getting called on a post after the
+            # the session lookup, quick hack here until I figure out why
+            if self.session.done:
+                super(self.__class__, self).finish(*args, **kwargs)
+                if self.session.do_save:
+                    self.session.db.update({"_id": self.session.session["_id"]}, {"$set": {"data":
+                    self.session.session["data"]}}, callback=self.session._pass)
+                if self.session.do_delete:
+                    self.session.db.remove({"_id": self.session.session["_id"]},
+                            callback=self.session._pass)
+
+        self.finish = functools.partial(finish, self)
         self.session = AsyncMongoSession(self, callback=method)
 
     return wrapper 
 
-"""
-class AsyncMongoSessionHandler(RequestHandler):
-    def __init__(self):
-        super(AsyncMongoSessionHandler, self).__init__()
-        self.session = AsyncMongoSession(self)
-
-    def finish(self, chunk = None):
-        super(AsyncMongoSessionHandler, self).finish(chunk = chunk)
-        if self.session.do_save:
-            self.db.update({"sid": self.sid}, {"$set": {"data":
-                self.session["data"]}}, callback=self._pass)
-"""
