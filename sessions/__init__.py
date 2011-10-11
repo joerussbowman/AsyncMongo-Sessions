@@ -124,10 +124,10 @@ class AsyncMongoSession(object):
                 self.session["last_token_update"] = datetime.datetime.now()
                 self.do_put = True
 
-        if self.do_put:
-            self._put()
-        else:
-            self._handle_response()
+            if self.do_put:
+                self._put()
+            else:
+                self._handle_response()
 
     def _put(self):
         if self.session.get("_id"):

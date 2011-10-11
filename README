@@ -22,7 +22,11 @@ Note: In an effort increate performance, all writes are delayed until after the
 request method has completed. 
 
 Example:
-    @amsession
+    @asyncmongosession
     def get(self):
+        if self.session.has_key("test"):
+            self.session["test"] +=  1
+        else:
+            self.session["test"] = 0
         self.render("index.html", session=self.session)
 
