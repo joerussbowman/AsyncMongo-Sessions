@@ -22,6 +22,7 @@ Note: In an effort increate performance, all writes are delayed until after the
 request method has completed. 
 
 Example:
+    @tornado.web.asynchronous
     @asyncmongosession
     def get(self):
         if self.session.has_key("test"):
@@ -30,3 +31,7 @@ Example:
             self.session["test"] = 0
         self.render("index.html", session=self.session)
 
+IMPORTANT: If using the asynchronous wrapper from Tornado you must wrap
+           the asyncmongosession with it, not the other way around. Otherwise
+           it will error and not render because the request finish method
+           will be called multiple times.
