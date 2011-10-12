@@ -74,7 +74,6 @@ class AsyncMongoSession(object):
         it. If other developers start using this library then I will consider
         making the db connection passed as an argument or something.
         """
-
         self.req_obj = req_obj
         self.cookie_path = cookie_path
         self.cookie_name = cookie_name
@@ -87,8 +86,6 @@ class AsyncMongoSession(object):
         self.do_put = False
         self.do_save = False
         self.do_delete = False
-        # self.done is part of UGLY HACK below
-        self.done = False
         self.cookie = req_obj.get_cookie(cookie_name)
 
         if self.cookie:
@@ -140,8 +137,6 @@ class AsyncMongoSession(object):
             self.db.save(self.session, callback=self._handle_response)
 
     def _handle_response(self, *args, **kwargs):
-        # more UGLY HACK
-        self.done = True
         cookie = "%s@%s" % (self.session["tokens"][0], self.session["_id"])
         self.req_obj.set_cookie(name = self.cookie_name, value =
                 cookie, path = self.cookie_path)
@@ -201,17 +196,13 @@ def asyncmongosession(method):
             This is a monkey patch finish which will save or delete
             session data at the end of a request.
             """
-            # TODO: UGLY HACK
-            # for some reason finish keeps getting called on a post after the
-            # the session lookup, quick hack here until I figure out why
-            if self.session.done:
-                super(self.__class__, self).finish(*args, **kwargs)
-                if self.session.do_save:
-                    self.session.db.update({"_id": self.session.session["_id"]}, {"$set": {"data":
-                    self.session.session["data"]}}, callback=self.session._pass)
-                if self.session.do_delete:
-                    self.session.db.remove({"_id": self.session.session["_id"]},
-                            callback=self.session._pass)
+            super(self.__class__, self).finish(*args, **kwargs)
+            if self.session.do_save:
+                self.session.db.update({"_id": self.session.session["_id"]}, {"$set": {"data":
+                self.session.session["data"]}}, callback=self.session._pass)
+            if self.session.do_delete:
+                self.session.db.remove({"_id": self.session.session["_id"]},
+                        callback=self.session._pass)
 
         self.finish = functools.partial(finish, self)
         self.session = AsyncMongoSession(self, callback=method)
