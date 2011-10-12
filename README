@@ -4,9 +4,14 @@ Tornado.
 
 Built on top of asyncmongo by bit.ly - https://github.com/bitly/asyncmongo
 The decorator is written to be completely asynchronous and not block.
-Because of this some care should be taken to optimize your MongoDB
-instance. Be sure to set an index on the "sid" key in your sessions
-collection.
+
+There are also some built in security features for the session. Only a token
+is stored as a cookie, all data is stored in MongoDB. The token rotates
+on a schedule you can define, the default is a token is valid for 5
+seconds, with the 3 most recent tokens being considered valid. This 
+helps lessen the risks associated with session fixation for non-ssl
+connections. Because of this the library will be more write heavy than
+standard session implementations.
 
 The session is added as session property to your request handler, ie:
 self.session. It can be manipulated as your would any dictionary object.
@@ -35,3 +40,7 @@ IMPORTANT: If using the asynchronous wrapper from Tornado you must wrap
            the asyncmongosession with it, not the other way around. Otherwise
            it will error and not render because the request finish method
            will be called multiple times.
+
+TODO: Support signed cookie data as session data. In instances where the
+session data doesn't need to be protected, such as anonymous users, it would
+be beneficial to not have any read/write processes happening to the database.
