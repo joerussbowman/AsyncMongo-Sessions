@@ -80,13 +80,13 @@ class AsyncMongoSession(object):
         self.session_token_ttl = session_token_ttl
         self.session_expire_time = session_expire_time
         self.callback = callback
-        self.db = req_obj.db[mongo_collection]
+        self.db = self.req_obj.db[mongo_collection]
 
         self.new_session = True
         self.do_put = False
         self.do_save = False
         self.do_delete = False
-        self.cookie = req_obj.get_cookie(cookie_name)
+        self.cookie = self.req_obj.get_secure_cookie(cookie_name)
 
         if self.cookie:
             (self.token, _id) = self.cookie.split("@")
@@ -98,7 +98,7 @@ class AsyncMongoSession(object):
     def _new_session(self):
         self.session = {"_id": bson.ObjectId(),
                 "tokens": [str(uuid.uuid4())],
-                "last_token_update": datetime.datetime.now(),
+                "last_token_update": datetime.datetime.utcnow(),
                 "data": {},
             }
         self._put()
@@ -112,13 +112,13 @@ class AsyncMongoSession(object):
             self._new_session()
         else:
             duration = datetime.timedelta(seconds=self.session_token_ttl)
-            session_age_limit = datetime.datetime.now() - duration
+            session_age_limit = datetime.datetime.utcnow() - duration
             if self.session['last_token_update'] < session_age_limit:
                 self.token = str(uuid.uuid4()) 
                 if len(self.session['tokens']) > 2:
                     self.session['tokens'].pop(0)
                 self.session['tokens'].insert(0,self.token)
-                self.session["last_token_update"] = datetime.datetime.now()
+                self.session["last_token_update"] = datetime.datetime.utcnow()
                 self.do_put = True
 
             if self.do_put:
@@ -138,10 +138,15 @@ class AsyncMongoSession(object):
 
     def _handle_response(self, *args, **kwargs):
         cookie = "%s@%s" % (self.session["tokens"][0], self.session["_id"])
-        self.req_obj.set_cookie(name = self.cookie_name, value =
+        self.req_obj.set_secure_cookie(name = self.cookie_name, value =
                 cookie, path = self.cookie_path)
         self.callback(self.req_obj)
 
+    def get_token(self):
+        return self.cookie
+
+    def get_id(self):
+        return self.session.get("_id")
 
     def delete(self):
         self.session['tokens'] = []
@@ -151,7 +156,7 @@ class AsyncMongoSession(object):
     def has_key(self, keyname):
         return self.__contains__(keyname)
 
-    def get(self, key, default):
+    def get(self, key, default=None):
         if self.has_key(key):
             return self[key]
         else:
