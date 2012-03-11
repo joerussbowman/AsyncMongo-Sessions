@@ -63,16 +63,20 @@ class AsyncMongoSession(object):
             session_token_ttl=settings.session["SESSION_TOKEN_TTL"],
             session_expire_time=settings.session["SESSION_EXPIRE_TIME"],
             mongo_collection=settings.session["MONGO_COLLECTION"],
+            db=None,
             callback=None):
         """
         __init__ loads the session, checking the browser for a valid session
         token. It will either validate the session and/or create a new one
         if necessary. 
+        
+        The db object should be a mongodb database, not collection. The
+        collection value is set by the settings for the library. See
+        settings.py for more information.
 
-        Currently AsyncMongoSession expects a db attribute on the request
-        object which is an AsyncMongo connection. This is just how I'm using
-        it. If other developers start using this library then I will consider
-        making the db connection passed as an argument or something.
+        If you already have a db attribute on the request or application
+        objects then there is no need to pass it. Sessions will automatically
+        check those objects for a valid database object to use.
         """
         self.req_obj = req_obj
         self.cookie_path = cookie_path
@@ -80,7 +84,14 @@ class AsyncMongoSession(object):
         self.session_token_ttl = session_token_ttl
         self.session_expire_time = session_expire_time
         self.callback = callback
-        self.db = self.req_obj.db[mongo_collection]
+        if db:
+            self.db = db[mongo_collection]
+        elif hasattr(self.req_obj, "db"):
+            self.db = self.req_obj.db[mongo_collection]
+        elif hasattr(self.req_obj.application, "db"):
+            self.db = self.req_obj.application.db[mongo_collection]
+        else:
+            raise ValueError("Invalid value for db")
 
         self.new_session = True
         self.do_put = False
